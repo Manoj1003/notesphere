@@ -1,0 +1,312 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── NextAuth Required Models ────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(uuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  notebooks   Notebook[]
+  folders     Folder[]
+  notes       Note[]
+  attachments Attachment[]
+  driveFiles  DriveFile[]
+  syncJobs    SyncJob[]
+  tags        Tag[]
+
+  driveRefreshToken     String?
+  driveConnectedAt      DateTime?
+  driveRootFolderId     String?
+  driveNotebookFolderId String?
+  driveNotesFolderId    String?
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── Application Models ───────────────────────────────────────────────────────
+
+model Folder {
+  id        String   @id @default(uuid())
+  ownerId   String
+  parentId  String?
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent    Folder?    @relation("FolderChildren", fields: [parentId], references: [id])
+  children  Folder[]   @relation("FolderChildren")
+  notebooks Notebook[]
+
+  @@index([ownerId])
+  @@map("folders")
+}
+
+model Notebook {
+  id          String    @id @default(uuid())
+  ownerId     String
+  folderId    String?
+  title       String
+  description String?
+  color       String    @default("#6366f1")
+  coverImage  String?
+  isArchived  Boolean   @default(false)
+  isFavorite  Boolean   @default(false)
+  isPinned    Boolean   @default(false)
+  sortOrder   Int       @default(0)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner  User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  folder Folder?  @relation(fields: [folderId], references: [id])
+  notes  Note[]
+
+  @@index([ownerId])
+  @@index([folderId])
+  @@map("notebooks")
+}
+
+model Note {
+  id           String        @id @default(uuid())
+  ownerId      String
+  notebookId   String?
+  title        String        @default("Untitled")
+  docType      NoteDocType   @default(RICH_TEXT)
+  content      Json?
+  version      Int           @default(1)
+  contentHash  String?
+  syncStatus   SyncStatus    @default(PENDING)
+  isFavorite   Boolean       @default(false)
+  isPinned     Boolean       @default(false)
+  isArchived   Boolean       @default(false)
+  deletedAt    DateTime?
+  lastOpenedAt DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  owner      User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  notebook   Notebook?     @relation(fields: [notebookId], references: [id])
+  pages      Page[]
+  attachments Attachment[]
+  driveFiles DriveFile[]
+  syncJobs   SyncJob[]
+  versions   NoteVersion[]
+  tags       NoteTag[]
+
+  @@index([ownerId])
+  @@index([notebookId])
+  @@index([syncStatus])
+  @@map("notes")
+}
+
+model Page {
+  id        String   @id @default(uuid())
+  noteId    String
+  title     String?
+  pageOrder Int      @default(0)
+  template  String   @default("blank")
+  settings  Json?
+  content   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@map("pages")
+}
+
+model Attachment {
+  id          String   @id @default(uuid())
+  ownerId     String
+  noteId      String?
+  filename    String
+  mimeType    String
+  size        Int
+  provider    String   @default("drive")
+  storageRef  String
+  checksum    String?
+  createdAt   DateTime @default(now())
+
+  owner      User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  note       Note?       @relation(fields: [noteId], references: [id])
+  driveFiles DriveFile[]
+
+  @@index([ownerId])
+  @@index([noteId])
+  @@map("attachments")
+}
+
+model DriveFile {
+  id              String    @id @default(uuid())
+  ownerId         String
+  noteId          String?
+  attachmentId    String?
+  driveFileId     String
+  mimeType        String
+  name            String
+  webViewLink     String?
+  lastSyncVersion Int       @default(1)
+  lastSyncedAt    DateTime?
+  checksum        String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  owner      User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  note       Note?       @relation(fields: [noteId], references: [id])
+  attachment Attachment? @relation(fields: [attachmentId], references: [id])
+
+  @@index([ownerId])
+  @@index([noteId])
+  @@map("drive_files")
+}
+
+model SyncJob {
+  id          String      @id @default(uuid())
+  ownerId     String
+  entityId    String
+  entityType  String
+  operation   SyncOp
+  status      JobStatus   @default(PENDING)
+  attempts    Int         @default(0)
+  maxAttempts Int         @default(5)
+  nextRetryAt DateTime?
+  lastError   String?
+  payload     Json?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  note  Note? @relation(fields: [entityId], references: [id])
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([nextRetryAt])
+  @@map("sync_jobs")
+}
+
+model NoteVersion {
+  id        String   @id @default(uuid())
+  noteId    String
+  version   Int
+  content   Json
+  createdAt DateTime @default(now())
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@map("note_versions")
+}
+
+model Tag {
+  id      String    @id @default(uuid())
+  ownerId String
+  name    String
+  color   String    @default("#6366f1")
+
+  owner    User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  noteTags NoteTag[]
+
+  @@unique([ownerId, name])
+  @@map("tags")
+}
+
+model NoteTag {
+  noteId String
+  tagId  String
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, tagId])
+  @@map("note_tags")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum NoteDocType {
+  RICH_TEXT
+  CANVAS
+  MIXED
+  PDF
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  SYNCING
+  FAILED
+  CONFLICT
+  LOCAL_ONLY
+}
+
+enum SyncOp {
+  CREATE
+  UPDATE
+  DELETE
+  DOWNLOAD
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
